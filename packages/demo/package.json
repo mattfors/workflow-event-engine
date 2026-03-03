@@ -1,8 +1,12 @@
 {
   "name": "demo",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "index.ts",
+  "scripts": {
+    "start": "npm run build -w engine && tsx index.ts"
+  },
   "dependencies": {
+    "commander": "^14.0.1",
     "engine": "*"
   }
 }

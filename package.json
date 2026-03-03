@@ -2,6 +2,14 @@
   "name": "workflow-event-engine",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "demo": "npm run start -w demo",
+    "demo:ws": "npm run start -w demo"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
   "workspaces": [
     "packages/*"
   ]
