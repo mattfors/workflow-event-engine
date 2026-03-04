@@ -1,9 +1,10 @@
-import type { EngineSnapshot } from 'engine';
+import type { CycleCountSnapshot, EngineSnapshot } from 'engine';
 
 export type DemoCommand =
-	| { type: 'assignpick'; pickId: string }
+	| { type: 'hydratepicks' }
 	| { type: 'listpicks' }
 	| { type: 'startpick'; pickId: string }
+	| { type: 'startcount'; countId: string }
 	| { type: 'scan'; value: string }
 	| { type: 'status' }
 	| { type: 'pick' }
@@ -20,8 +21,11 @@ export interface DemoDriver {
 	handleLine(input: string): CommandResult;
 }
 
-export function formatSnapshot(snapshot: EngineSnapshot): string {
-	const progress = `${snapshot.itemScanCount}/${snapshot.pick.quantity}`;
+export function formatSnapshot(snapshot: EngineSnapshot | CycleCountSnapshot): string {
+	const totalCount = 'pick' in snapshot
+		? snapshot.pick.quantity
+		: snapshot.workItem.count;
+	const progress = `${snapshot.itemScanCount}/${totalCount}`;
 	const error = snapshot.error ?? 'none';
 	return `state=${snapshot.state} progress=${progress} done=${snapshot.done} error=${error}`;
 }

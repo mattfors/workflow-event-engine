@@ -1,25 +1,14 @@
-export interface Pick {
-    id: string;
-    location: string;
-    carton: string;
-    validItemCodes: string[];
-    quantity: number;
-}
-export type PickInput = Pick;
-type ScanEvent = {
-    type: 'SCAN';
-    value: string;
-};
+import { type Pick, type PickWorkItem } from './picking.model';
+import { type ScanEvent } from './scan.shared';
 export interface EngineSnapshot {
     state: string;
-    pick: Pick;
+    pick: PickWorkItem;
     itemScanCount: number;
     done: boolean;
     error: string | null;
 }
-export declare function createPickEngine(pickInput: PickInput): {
+export declare function createPickEngine(pickInput: Pick): {
     send(event: ScanEvent): EngineSnapshot;
     getSnapshot(): EngineSnapshot;
     stop(): void;
 };
-export {};

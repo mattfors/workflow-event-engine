@@ -2,19 +2,16 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createPickEngine = createPickEngine;
 const xstate_1 = require("xstate");
-function normalizePick(pickInput) {
+const picking_model_1 = require("./picking.model");
+const scan_shared_1 = require("./scan.shared");
+const pickScanErrorMessages = {
+    [scan_shared_1.SCAN_ERROR_CODES.INVALID_SCAN]: 'Scanned item code is not valid for this pick',
+};
+function getCountedScanBase(pick) {
     return {
-        id: pickInput?.id ?? '',
-        location: pickInput?.location ?? '',
-        carton: pickInput?.carton ?? '',
-        validItemCodes: Array.isArray(pickInput?.validItemCodes) ? pickInput.validItemCodes : [],
-        quantity: Number.isInteger(pickInput?.quantity) && pickInput.quantity > 0 ? pickInput.quantity : 0,
+        requiredCount: pick.quantity,
+        validScans: pick.validItemCodes,
     };
-}
-function validatePick(pick) {
-    if (!pick.id || !pick.location || !pick.carton || pick.validItemCodes.length === 0 || pick.quantity < 1) {
-        throw new Error('createPickEngine requires pick with id, location, carton, validItemCodes, and quantity');
-    }
 }
 function toSnapshot(actor) {
     const state = actor.getSnapshot();
@@ -72,23 +69,24 @@ const machineTemplate = (0, xstate_1.createMachine)({
             on: {
                 SCAN: [
                     {
-                        guard: ({ context, event }) => (context.pick.validItemCodes.includes(event.value)
-                            && context.itemScanCount + 1 >= context.pick.quantity),
+                        guard: ({ context, event }) => (0, scan_shared_1.scanCompletesRequiredCount)(getCountedScanBase(context.pick), context.itemScanCount, event.value),
                         target: 'scanCartonRescan',
                         actions: (0, xstate_1.assign)({
-                            itemScanCount: ({ context }) => context.itemScanCount + 1,
+                            itemScanCount: ({ context, event }) => (0, scan_shared_1.nextScanCount)(getCountedScanBase(context.pick), context.itemScanCount, event.value),
                             error: null,
                         }),
                     },
                     {
-                        guard: ({ context, event }) => context.pick.validItemCodes.includes(event.value),
+                        guard: ({ context, event }) => (0, scan_shared_1.isScanValid)(getCountedScanBase(context.pick), event.value),
                         actions: (0, xstate_1.assign)({
-                            itemScanCount: ({ context }) => context.itemScanCount + 1,
+                            itemScanCount: ({ context, event }) => (0, scan_shared_1.nextScanCount)(getCountedScanBase(context.pick), context.itemScanCount, event.value),
                             error: null,
                         }),
                     },
                     {
-                        actions: (0, xstate_1.assign)({ error: () => 'Scanned item code is not valid for this pick' }),
+                        actions: (0, xstate_1.assign)({
+                            error: () => (0, scan_shared_1.messageFromScanError)(scan_shared_1.SCAN_ERROR_CODES.INVALID_SCAN, pickScanErrorMessages, 'Scanned item code is not valid for this pick'),
+                        }),
                     },
                 ],
             },
@@ -113,8 +111,8 @@ const machineTemplate = (0, xstate_1.createMachine)({
     },
 });
 function createPickEngine(pickInput) {
-    const pick = normalizePick(pickInput);
-    validatePick(pick);
+    const pick = (0, picking_model_1.normalizePick)(pickInput);
+    (0, picking_model_1.validatePickWorkItem)(pick);
     const actor = (0, xstate_1.createActor)(machineTemplate, { input: pick });
     actor.start();
     return {

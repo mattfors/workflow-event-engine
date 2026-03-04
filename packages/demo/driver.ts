@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { createPickEngine } from 'engine';
+import { createCycleCountEngine, createPickEngine } from 'engine';
 import * as engineModule from 'engine';
 import type { CommandResult, DemoCommand, DemoDriver } from './contracts';
 import { formatSnapshot } from './contracts';
@@ -12,6 +12,12 @@ interface DemoPickFixture {
 	quantity: number;
 }
 
+interface DemoCycleCountFixture {
+	id: string;
+	validScans: string[];
+	count: number;
+}
+
 const pickFixtures: Record<string, DemoPickFixture> = {
 	'123': {
 		id: '123',
@@ -22,7 +28,17 @@ const pickFixtures: Record<string, DemoPickFixture> = {
 	},
 };
 
-type ActiveEngine = ReturnType<typeof createPickEngine>;
+const cycleCountFixtures: Record<string, DemoCycleCountFixture> = {
+	'cc-1': {
+		id: 'cc-1',
+		validScans: ['sku-1', 'SKU-1'],
+		count: 3,
+	},
+};
+
+type ActivePickEngine = ReturnType<typeof createPickEngine>;
+type ActiveCycleCountEngine = ReturnType<typeof createCycleCountEngine>;
+type ActiveEngine = ActivePickEngine | ActiveCycleCountEngine;
 const createPickingSupervisor = (engineModule as any).createPickingSupervisor as () => {
 	send: (event: unknown) => {
 		state: string;
@@ -63,8 +79,12 @@ function parseCommand(input: string): { command?: DemoCommand; error?: string } 
 		parsed = { type: 'startpick', pickId: String(pickId) };
 	});
 
-	program.command('assignpick <pickId>').action((pickId) => {
-		parsed = { type: 'assignpick', pickId: String(pickId) };
+	program.command('startcount <countId>').action((countId) => {
+		parsed = { type: 'startcount', countId: String(countId) };
+	});
+
+	program.command('hydratepicks').action(() => {
+		parsed = { type: 'hydratepicks' };
 	});
 
 	program.command('listpicks').action(() => {
@@ -111,9 +131,10 @@ function parseCommand(input: string): { command?: DemoCommand; error?: string } 
 function helpLines(): string[] {
 	return [
 		'Commands:',
-		'  assignpick <id>',
+		'  hydratepicks',
 		'  listpicks',
 		'  startpick <id>',
+		'  startcount <id>',
 		'  scan <value>',
 		'  status',
 		'  pick',
@@ -121,9 +142,10 @@ function helpLines(): string[] {
 		'  exit',
 		'',
 		'Example:',
-		'  assignpick 123',
+		'  hydratepicks',
 		'  listpicks',
 		'  startpick 123',
+		'  startcount cc-1',
 		'  scan abc',
 		'  scan 123',
 		'  scan ttyu',
@@ -132,12 +154,24 @@ function helpLines(): string[] {
 	];
 }
 
-function pickDetailsLines(engine: ActiveEngine): string[] {
+function activeDetailsLines(engine: ActiveEngine): string[] {
 	const snapshot = engine.getSnapshot();
-	const pickJsonLines = JSON.stringify(snapshot.pick, null, 2).split('\n');
+	if ('pick' in snapshot) {
+		const pickJsonLines = JSON.stringify(snapshot.pick, null, 2).split('\n');
+		return [
+			'Current pick:',
+			...pickJsonLines,
+			`  itemScanCount: ${snapshot.itemScanCount}`,
+			`  state: ${snapshot.state}`,
+			`  done: ${snapshot.done}`,
+			`  error: ${snapshot.error ?? 'none'}`,
+		];
+	}
+
+	const countJsonLines = JSON.stringify(snapshot.workItem, null, 2).split('\n');
 	return [
-		'Current pick:',
-		...pickJsonLines,
+		'Current cycle count item:',
+		...countJsonLines,
 		`  itemScanCount: ${snapshot.itemScanCount}`,
 		`  state: ${snapshot.state}`,
 		`  done: ${snapshot.done}`,
@@ -164,29 +198,25 @@ export function createDemoDriver(): DemoDriver {
 			}
 
 			switch (parsed.command.type) {
-				case 'assignpick': {
-					const pick = pickFixtures[parsed.command.pickId];
-					if (!pick) {
-						return { lines: [`Pick ${parsed.command.pickId} not found.`] };
-					}
-
-					const snapshot = picking.send({ type: 'ASSIGN_PICKS', picks: [pick] });
+				case 'hydratepicks': {
+					const picks = Object.values(pickFixtures);
+					const snapshot = picking.send({ type: 'HYDRATE_PICKS', picks });
 					return {
 						lines: [
-							`Assigned pick ${pick.id}.`,
-							`Supervisor state=${snapshot.state} assigned=${snapshot.assignedPicks.length} active=${snapshot.activePickId ?? 'none'}`,
+							`Hydrated ${snapshot.assignedPicks.length} picks.`,
+							`Supervisor state=${snapshot.state} picks=${snapshot.assignedPicks.length} active=${snapshot.activePickId ?? 'none'}`,
 						],
 					};
 				}
 				case 'listpicks': {
 					const snapshot = picking.getSnapshot();
 					if (snapshot.assignedPicks.length === 0) {
-						return { lines: ['No assigned picks. Run assignpick <id> first.'] };
+						return { lines: ['No hydrated picks. Run hydratepicks first.'] };
 					}
 
 					return {
 						lines: [
-							`Assigned picks (${snapshot.assignedPicks.length}):`,
+							`Hydrated picks (${snapshot.assignedPicks.length}):`,
 							...snapshot.assignedPicks.map((pick) => `  - ${pick.id}`),
 							`Active pick: ${snapshot.activePickId ?? 'none'}`,
 						],
@@ -215,29 +245,55 @@ export function createDemoDriver(): DemoDriver {
 						],
 					};
 				}
+				case 'startcount': {
+					const cycleCount = cycleCountFixtures[parsed.command.countId];
+					if (!cycleCount) {
+						return {
+							lines: [
+								`Cycle count ${parsed.command.countId} not found. Available ids: ${Object.keys(cycleCountFixtures).join(', ')}`,
+							],
+						};
+					}
+
+					if (activeEngine) {
+						activeEngine.stop();
+					}
+
+					activeEngine = createCycleCountEngine(cycleCount);
+					return {
+						lines: [
+							`Started cycle count ${cycleCount.id}.`,
+							formatSnapshot(activeEngine.getSnapshot()),
+						],
+					};
+				}
 				case 'scan': {
 					if (!activeEngine) {
-						return { lines: ['No active pick. Run startpick <id> first.'] };
+						return { lines: ['No active workflow. Run startpick <id> or startcount <id> first.'] };
 					}
 
 					const snapshot = activeEngine.send({ type: 'SCAN', value: parsed.command.value });
 					const lines = [`Scanned: ${parsed.command.value}`, formatSnapshot(snapshot)];
 					if (snapshot.done) {
-						lines.push(`Pick ${snapshot.pick.id} complete.`);
+						if ('pick' in snapshot) {
+							lines.push(`Pick ${snapshot.pick.id} complete.`);
+						} else {
+							lines.push(`Cycle count ${snapshot.workItem.id} complete.`);
+						}
 					}
 					return { lines };
 				}
 				case 'status': {
 					if (!activeEngine) {
-						return { lines: ['No active pick.'] };
+						return { lines: ['No active workflow.'] };
 					}
 					return { lines: [formatSnapshot(activeEngine.getSnapshot())] };
 				}
 				case 'pick': {
 					if (!activeEngine) {
-						return { lines: ['No active pick.'] };
+						return { lines: ['No active workflow.'] };
 					}
-					return { lines: pickDetailsLines(activeEngine) };
+					return { lines: activeDetailsLines(activeEngine) };
 				}
 				case 'help': {
 					return { lines: helpLines() };

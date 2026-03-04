@@ -2,28 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createPickingSupervisor = createPickingSupervisor;
 const xstate_1 = require("xstate");
-function normalizePick(pick) {
-    return {
-        id: pick?.id ?? '',
-        location: pick?.location ?? '',
-        carton: pick?.carton ?? '',
-        validItemCodes: Array.isArray(pick?.validItemCodes) ? pick.validItemCodes : [],
-        quantity: Number.isInteger(pick?.quantity) && pick.quantity > 0 ? pick.quantity : 0,
-    };
-}
-function isValidPick(pick) {
-    return Boolean(pick.id
-        && pick.location
-        && pick.carton
-        && pick.validItemCodes.length > 0
-        && pick.quantity > 0);
-}
-function mergeAssignedPicks(currentById, currentOrder, incomingPicks) {
-    const nextById = { ...currentById };
-    const nextOrder = [...currentOrder];
+const picking_model_1 = require("./picking.model");
+function hydratePicks(incomingPicks) {
+    const nextById = {};
+    const nextOrder = [];
     for (const pickInput of incomingPicks) {
-        const pick = normalizePick(pickInput);
-        if (!isValidPick(pick)) {
+        const pick = (0, picking_model_1.normalizePick)(pickInput);
+        if (!(0, picking_model_1.isValidPickWorkItem)(pick)) {
             continue;
         }
         nextById[pick.id] = pick;
@@ -55,6 +40,23 @@ const pickingMachine = (0, xstate_1.createMachine)({
     },
     id: 'picking',
     initial: 'idle',
+    on: {
+        HYDRATE_PICKS: {
+            target: '.ready',
+            actions: (0, xstate_1.assign)(({ context, event }) => {
+                const { nextById, nextOrder } = hydratePicks(event.picks);
+                const activePickId = context.activePickId && nextById[context.activePickId]
+                    ? context.activePickId
+                    : null;
+                return {
+                    assignedPicksById: nextById,
+                    pickOrder: nextOrder,
+                    activePickId,
+                    error: null,
+                };
+            }),
+        },
+    },
     context: {
         assignedPicksById: {},
         pickOrder: [],
@@ -63,32 +65,10 @@ const pickingMachine = (0, xstate_1.createMachine)({
     },
     states: {
         idle: {
-            on: {
-                ASSIGN_PICKS: {
-                    target: 'ready',
-                    actions: (0, xstate_1.assign)(({ context, event }) => {
-                        const { nextById, nextOrder } = mergeAssignedPicks(context.assignedPicksById, context.pickOrder, event.picks);
-                        return {
-                            assignedPicksById: nextById,
-                            pickOrder: nextOrder,
-                            error: null,
-                        };
-                    }),
-                },
-            },
+            on: {},
         },
         ready: {
             on: {
-                ASSIGN_PICKS: {
-                    actions: (0, xstate_1.assign)(({ context, event }) => {
-                        const { nextById, nextOrder } = mergeAssignedPicks(context.assignedPicksById, context.pickOrder, event.picks);
-                        return {
-                            assignedPicksById: nextById,
-                            pickOrder: nextOrder,
-                            error: null,
-                        };
-                    }),
-                },
                 START_PICK: [
                     {
                         guard: ({ context, event }) => Boolean(context.assignedPicksById[event.pickId]),
@@ -106,15 +86,8 @@ const pickingMachine = (0, xstate_1.createMachine)({
         },
         active: {
             on: {
-                ASSIGN_PICKS: {
-                    actions: (0, xstate_1.assign)(({ context, event }) => {
-                        const { nextById, nextOrder } = mergeAssignedPicks(context.assignedPicksById, context.pickOrder, event.picks);
-                        return {
-                            assignedPicksById: nextById,
-                            pickOrder: nextOrder,
-                            error: null,
-                        };
-                    }),
+                HYDRATE_PICKS: {
+                    guard: () => false,
                 },
                 START_PICK: [
                     {

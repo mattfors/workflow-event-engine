@@ -1,6 +1,6 @@
-import type { Pick } from './pick-process.machine';
+import { type Pick, type PickWorkItem } from './picking.model';
 type PickingEvent = {
-    type: 'ASSIGN_PICKS';
+    type: 'HYDRATE_PICKS';
     picks: Pick[];
 } | {
     type: 'START_PICK';
@@ -8,9 +8,9 @@ type PickingEvent = {
 };
 export interface PickingSnapshot {
     state: string;
-    assignedPicks: Pick[];
+    assignedPicks: PickWorkItem[];
     activePickId: string | null;
-    activePick: Pick | null;
+    activePick: PickWorkItem | null;
     error: string | null;
 }
 export declare function createPickingSupervisor(): {

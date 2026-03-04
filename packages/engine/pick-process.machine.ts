@@ -1,48 +1,33 @@
 import { createActor, createMachine, assign, type ActorRefFrom } from 'xstate';
-
-export interface Pick {
-	id: string;
-	location: string;
-	carton: string;
-	validItemCodes: string[];
-	quantity: number;
-}
-
-export type PickInput = Pick;
+import {
+	type Pick,
+	type PickWorkItem,
+	normalizePick,
+	validatePickWorkItem,
+} from './picking.model';
+import {
+	type ScanEvent,
+} from './scan.shared';
+import {
+	createDelegatedScanItemState,
+	createPickScanItemEngine,
+	type ScanItemEngine,
+} from './scan-item.engine';
 
 interface EngineContext {
-	pick: Pick;
+	pick: PickWorkItem;
+	scanItemEngine: ScanItemEngine;
 	itemScanCount: number;
+	scanItemDone: boolean;
 	error: string | null;
 }
-
-type ScanEvent = {
-	type: 'SCAN';
-	value: string;
-};
 
 export interface EngineSnapshot {
 	state: string;
-	pick: Pick;
+	pick: PickWorkItem;
 	itemScanCount: number;
 	done: boolean;
 	error: string | null;
-}
-
-function normalizePick(pickInput: PickInput): Pick {
-	return {
-		id: pickInput?.id ?? '',
-		location: pickInput?.location ?? '',
-		carton: pickInput?.carton ?? '',
-		validItemCodes: Array.isArray(pickInput?.validItemCodes) ? pickInput.validItemCodes : [],
-		quantity: Number.isInteger(pickInput?.quantity) && pickInput.quantity > 0 ? pickInput.quantity : 0,
-	};
-}
-
-function validatePick(pick: Pick): void {
-	if (!pick.id || !pick.location || !pick.carton || pick.validItemCodes.length === 0 || pick.quantity < 1) {
-		throw new Error('createPickEngine requires pick with id, location, carton, validItemCodes, and quantity');
-	}
 }
 
 function toSnapshot(actor: ActorRefFrom<typeof machineTemplate>): EngineSnapshot {
@@ -60,13 +45,15 @@ const machineTemplate = createMachine({
 	types: {
 		context: {} as EngineContext,
 		events: {} as ScanEvent,
-		input: {} as Pick,
+		input: {} as PickWorkItem,
 	},
 	id: 'pickEngine',
 	initial: 'scanLocation',
 	context: ({ input }) => ({
 		pick: input,
+		scanItemEngine: createPickScanItemEngine(input),
 		itemScanCount: 0,
+		scanItemDone: false,
 		error: null,
 	}),
 	states: {
@@ -98,33 +85,7 @@ const machineTemplate = createMachine({
 				],
 			},
 		},
-		scanItem: {
-			on: {
-				SCAN: [
-					{
-						guard: ({ context, event }) => (
-							context.pick.validItemCodes.includes(event.value)
-							&& context.itemScanCount + 1 >= context.pick.quantity
-						),
-						target: 'scanCartonRescan',
-						actions: assign({
-							itemScanCount: ({ context }) => context.itemScanCount + 1,
-							error: null,
-						}),
-					},
-					{
-						guard: ({ context, event }) => context.pick.validItemCodes.includes(event.value),
-						actions: assign({
-							itemScanCount: ({ context }) => context.itemScanCount + 1,
-							error: null,
-						}),
-					},
-					{
-						actions: assign({ error: () => 'Scanned item code is not valid for this pick' }),
-					},
-				],
-			},
-		},
+		scanItem: createDelegatedScanItemState('scanCartonRescan'),
 		scanCartonRescan: {
 			on: {
 				SCAN: [
@@ -145,9 +106,9 @@ const machineTemplate = createMachine({
 	},
 });
 
-export function createPickEngine(pickInput: PickInput) {
+export function createPickEngine(pickInput: Pick) {
 	const pick = normalizePick(pickInput);
-	validatePick(pick);
+	validatePickWorkItem(pick);
 	const actor = createActor(machineTemplate, { input: pick });
 	actor.start();
 
@@ -160,6 +121,7 @@ export function createPickEngine(pickInput: PickInput) {
 			return toSnapshot(actor);
 		},
 		stop(): void {
+			actor.getSnapshot().context.scanItemEngine.stop();
 			actor.stop();
 		},
 	};
